@@ -15,8 +15,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/fatih/color"
 	tld "github.com/jpillora/go-tld"
 	"github.com/likexian/whois"
 	whoisparser "github.com/likexian/whois-parser"
@@ -39,7 +37,15 @@ var (
 	record_info    = make(map[string][]string)
 )
 
+const colorReset = "\033[0m"
+const colorYellow = "\033[33m"
+const colorRed = "\033[31m"
+const colorCyan = "\033[36m"
+const colorGreen = "\033[32m"
+
 func main() {
+
+	info("test1")
 
 	const usage = `Usage: ./mx-takeover [--mailgun-api APIKEY] [--check-whois] [--expire-day DAYS] [--show-only-mx] [--verbose] [--workers NUMBER-OF-WORKERS] [--throttle MILISECONDS] [--output /path/to/file]
 Example: cat domains.txt | mx-takeover
@@ -98,24 +104,31 @@ Example: cat domains.txt | mx-takeover
 
 	fi, _ := os.Stdin.Stat()
 	if fi.Mode()&os.ModeNamedPipe == 0 {
-		color.Red("No data found in pipe. urls must given using pipe!")
+		nonFatalError("No data found in pipe. urls must given using pipe!")
 		os.Exit(1)
 	} else {
 		readFromStdin()
 	}
 
-	color.Cyan("[*] Scan Starting Time: %s", time.Now().Format("2006-01-02 15:04:05"))
+	info("Scan Starting Time: " + time.Now().Format("2006-01-02 15:04:05"))
 
 	if *mailgun_api == "" {
-		color.Yellow("[!] Mailgun-api was not provided. You should register domain to mailgun manually")
+		warning("Mailgun-api was not provided. You should register domain to mailgun manually")
 	}
 
 	if *check_whois == false {
-		color.Yellow("[!] Check-whois argument was not provided. It will not checked whois lookup against MX domains that found.")
+		warning("Check-whois argument was not provided. It will not checked whois lookup against MX domains that found.")
 	}
 
 	len_url := len(urls)
-	color.Cyan("[*] %d domain will be scanned.", len_url)
+	if (len_url==0){
+		info("0 domains will be scanned.")
+	} else if(len_url==1){
+		info("1 domain will be scanned.")
+	} else {
+		info(string(len_url) +" domains will be scanned.")
+	}
+	
 
 
 	var waitgroup sync.WaitGroup
@@ -146,7 +159,7 @@ Example: cat domains.txt | mx-takeover
 	wp.StopWait()
 	*/
 
-	defer color.Cyan("[*] End Time: %s", time.Now().Format("2006-01-02 15:04:05"))
+	defer info("End Time: " + time.Now().Format("2006-01-02 15:04:05"))
 
 	if *output != "" {
 		defer writeToFile(*output, record_info)
@@ -158,7 +171,7 @@ Example: cat domains.txt | mx-takeover
 
 	defer whoisMXDomain(record_info)
 	if *check_whois {
-		defer color.Cyan("[*] Domains that expire in less than %d days", *expr_day)
+		defer info("Domains that expire in less than " + string(*expr_day) + " days")
 	}
 }
 
@@ -188,12 +201,12 @@ func getDNSRecord(domain string) {
 	dnsClient := retryabledns.New(resolvers, retries)
 	_, err := dnsClient.Resolve(hostname)
 	if err != nil {
-		color.Yellow("%s -> %s skipping...", err, hostname)
+		warning(hostname + ": skipping...")
 	}
 
 	dnsResponses, err := dnsClient.Query(hostname, dns.TypeMX)
 	if err != nil {
-		color.Yellow("%s -> %s skipping...", err, hostname)
+		warning(hostname + ": skipping...")
 	}
 
 	if *verbose {
@@ -210,12 +223,12 @@ func getDNSRecord(domain string) {
 				if err != nil {
 					api_error := strings.ReplaceAll(err.Error(), "\n", "")
 					if strings.Contains(api_error, "Error: ") {
-						color.Red("[-] Mailgun API Response -> %s", strings.Split(api_error, "Error: ")[1])
+						nonFatalError("Mailgun API Response -> " + strings.Split(api_error, "Error: ")[1])
 					} else {
-						color.Red("[-] ERROR:%s", api_error)
+						nonFatalError(api_error)
 					}
 				} else {
-					color.Green("[+] Domain reclaimed successfully! :: %s\n", domain)
+					success("Domain reclaimed successfully! :: " + domain + "\n")
 				}
 			}
 		} else {
@@ -234,7 +247,7 @@ func checkMXForMailgun(domain string, mxs []string) bool {
 	for _, s := range mxs {
 		for _, m := range mailgun_mx {
 			if s == m {
-				color.Green("[+] Possible Takeover Found! :: %s MX %s", domain, m)
+				success("Possible Takeover Found! :: " + domain +" MX " + m)
 				return true
 			}
 		}
@@ -276,7 +289,7 @@ func whoisMXDomain(domains map[string][]string) {
 					expireMXDomain(mx_domain, result.Domain.ExpirationDate, dmn)
 				}
 			} else if err.Error() == "whoisparser: domain is not found" {
-				color.Green("[+] Unregistered MX domain was detected! %s MX %s", dmn, mx_domain)
+				success("Unregistered MX domain was detected! " + strings.Join(dmn," ") + " MX " + mx_domain)
 			} else {
 				fmt.Println("Error Detected!", err)
 			}
@@ -301,14 +314,14 @@ func expireMXDomain(mx_domain, expire_date string, dmn []string) {
 	days_remain := int(diff.Hours() / 24)
 	len_dmn := len(dmn)
 	if days_remain < *expr_day {
-		color.Green("[+] %s will be expired after [%d] days. It being used by %d diffirent domain. Expire Time: [%s]. Domains that used by this mx:", mx_domain, days_remain, len_dmn, expire_date) // number of days
+		success("" + mx_domain + " will be expired after [" + string(days_remain) + "] days. It being used by " + string(len_dmn) + " diffirent domain. Expire Time: [" + expire_date + "]. Domains that used by this mx:") // number of days
 		fmt.Println(dmn)
 	}
 }
 
 func scanSummary() {
 	for mx, domains := range record_info {
-		fmt.Printf("%s being used %d different domains. %s mx record being used by these domains : %s \n", mx, len(domains), mx, domains)
+		fmt.Println("%s being used %d different domains. %s mx record being used by these domains : %s \n", mx, len(domains), mx, domains)
 	}
 }
 
@@ -327,12 +340,12 @@ func writeToFile(filename string, data map[string][]string) error {
 			return err
 		}
 	}
-	color.Cyan("[*] Scan results was saved to %s", filename)
+	info("Scan results was saved to " + filename)
 	return file.Sync()
 }
 
 func printConf() {
-	fmt.Printf(`
+	fmt.Println(`
 _____________________________________________
 
 Worker      	: %d
@@ -356,4 +369,26 @@ func printBanner() {
 														
 hunting misconfigured MX records
  `)
+}
+
+
+func crash(message string, err error) {
+	fmt.Print(string(colorRed) + "[FATAL]: " + message + string(colorReset) + "\n")
+	panic(err)
+}
+
+func nonFatalError(message string) {
+	fmt.Print(string(colorRed) + "[ERROR]: " + message + string(colorReset) + "\n")
+}
+
+func warning(message string) {
+	fmt.Print(string(colorYellow) + "[WARNING]: " + message + string(colorReset) + "\n")
+}
+
+func info(message string){
+	fmt.Print(string(colorCyan) + "[-] " + message + string(colorReset) + "\n")
+}
+
+func success(message string){
+	fmt.Print(string(colorGreen) + "[+] " + message + string(colorReset) + "\n")
 }
