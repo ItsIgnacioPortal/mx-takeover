@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/gammazero/workerpool"
 	tld "github.com/jpillora/go-tld"
 	"github.com/likexian/whois"
 	whoisparser "github.com/likexian/whois-parser"
@@ -27,6 +26,7 @@ import (
 
 var (
 	worker         *int
+	throttle       *int
 	help           *bool
 	expr_day       *int
 	mailgun_api    *string
@@ -36,29 +36,61 @@ var (
 	output         *string
 	mutex          sync.Mutex
 	urls           []string
-	mail_providers *[]string
 	record_info    = make(map[string][]string)
 )
 
-func init() {
-	mailgun_api = flag.String("mailgun-api", "", "mailgun api for domain takeover automatically")
-	check_whois = flag.Bool("check-whois", false, "Check whois for detecting unregistered mx domain or will be expire soon")
-	expr_day = flag.Int("expire-day", 30, "Estimated days for expiration")
-	only_mx = flag.Bool("show-only-mx", false, "show only that have mx records")
-	verbose = flag.Bool("v", false, "Print all log")
-	worker = flag.Int("w", 8, "number of worker")
-	output = flag.String("output", "", "Save output to file as json")
-	help = flag.Bool("h", false, "help")
-}
-
 func main() {
-	printBanner()
-	flag.Parse()
 
-	if *help {
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
+	const usage = `Usage: ./mx-takeover [--mailgun-api APIKEY] [--check-whois] [--expire-day DAYS] [--show-only-mx] [--verbose] [--workers NUMBER-OF-WORKERS] [--throttle MILISECONDS] [--output /path/to/file]
+Example: cat domains.txt | mx-takeover
+  -m, --mailgun-api string
+      mailgun api for automatic domain takeover
+
+  -c, --check-whois
+      Check whois for detecting unregistered mx domain or domains that will expire soon
+
+  -e, --expire-day
+      Estimated days for expiration
+      (Default: 30)
+
+  -s, --show-only-mx
+      Only show targets which have MX records
+
+  -v, --verbose
+      Print all logs
+
+  -w, --workers INT
+      Number of workers
+      (Default: 5)
+
+  -t, --throttle INT
+      Number of miliseconds to wait between each request
+      (Default: 200)
+
+  -h, --help
+      Display this message
+`
+
+	mailgun_api = flag.String("mailgun-api", "", "mailgun api for automatic domain takeover")
+	mailgun_api = flag.String("m", "", "mailgun api for automatic domain takeover")
+	check_whois = flag.Bool("check-whois", false, "Check whois for detecting unregistered mx domain or domains that will expire soon")
+	check_whois = flag.Bool("c", false, "Check whois for detecting unregistered mx domain or domains that will expire soon")
+	expr_day = flag.Int("expire-day", 30, "Estimated days for expiration")
+	expr_day = flag.Int("e", 30, "Estimated days for expiration")
+	only_mx = flag.Bool("show-only-mx", false, "Only show targets which have MX records")
+	only_mx = flag.Bool("s", false, "Only show targets which have MX records")
+	verbose = flag.Bool("verbose", false, "Print all logs")
+	verbose = flag.Bool("v", false, "Print all logs")
+	worker = flag.Int("workers", 8, "Number of workers")
+	worker = flag.Int("w", 8, "Number of workers")
+	throttle = flag.Int("throttle", 200, "Number of miliseconds to wait between each request")
+	throttle = flag.Int("t", 200, "Number of miliseconds to wait between each request")
+	output = flag.String("output", "", "Save output to file as JSON")
+	output = flag.String("o", "", "Save output to file as JSON")
+
+	printBanner()
+	flag.Usage = func() { fmt.Print(usage) }
+	flag.Parse()
 
 	if *verbose {
 		printConf()
@@ -85,16 +117,35 @@ func main() {
 	len_url := len(urls)
 	color.Cyan("[*] %d domain will be scanned.", len_url)
 
+
+	var waitgroup sync.WaitGroup
+	waitgroup.Add(len_url);
+
+	//foreach domain in urls...
+	for _, domain := range urls {
+		//start goroutine
+		go func(){
+			getDNSRecord(domain)
+			waitgroup.Done();
+		}();
+	}
+	
+	//wait until all goroutines finish
+	waitgroup.Wait();
+
+	/*
 	wp := workerpool.New(*worker)
 
-	for id, r := range urls {
-		r := r
+	for id, domain := range urls {
+		domain := domain
 		wp.Submit(func() {
-			getDNSRecord(id, r, mail_providers)
+			getDNSRecord(id, domain)
 		})
 	}
 
 	wp.StopWait()
+	*/
+
 	defer color.Cyan("[*] End Time: %s", time.Now().Format("2006-01-02 15:04:05"))
 
 	if *output != "" {
@@ -130,7 +181,7 @@ func readFromStdin() {
 	}
 }
 
-func getDNSRecord(id int, domain string, mail_providers *[]string) {
+func getDNSRecord(domain string) {
 	resolvers := []string{"1.1.1.1:53", "8.8.8.8:53", "8.8.4.4:53", "1.0.0.1:53", "208.67.222.222:53"}
 	retries := 2
 	hostname := domain
@@ -173,6 +224,9 @@ func getDNSRecord(id int, domain string, mail_providers *[]string) {
 			}
 		}
 	}
+
+	//throttle
+	time.Sleep(time.Millisecond * time.Duration(*throttle));
 }
 
 func checkMXForMailgun(domain string, mxs []string) bool {
@@ -301,6 +355,5 @@ func printBanner() {
 |_| |_| |_/_/\_\     \__\__,_|_|\_\___|\___/ \_/ \___|_|   
 														
 hunting misconfigured MX records
-musana.net | @musana
  `)
 }
